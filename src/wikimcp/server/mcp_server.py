@@ -16,11 +16,69 @@ from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from ..wiki import operations
 from ..wiki.git_layer import push_auto_remotes
 from .auth import extract_token, validate_token, update_last_active
 from .router import resolve_wiki_dir, get_auto_push_remotes
+
+
+# ---------------------------------------------------------------------------
+# Transport security (streamable-HTTP DNS-rebinding protection)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ALLOWED_HOST_NAMES = ["localhost", "127.0.0.1"]
+
+
+def http_transport_security(
+    extra_hosts: list[str] | None = None,
+    *,
+    disable_protection: bool = False,
+) -> TransportSecuritySettings:
+    """Build TransportSecuritySettings for the streamable-HTTP transport.
+
+    The MCP SDK's DNS-rebinding protection defaults to a localhost-only Host
+    allowlist and returns HTTP 421 "Invalid Host header" for anything else
+    (e.g. host.docker.internal from a Docker-hosted client). This helper keeps
+    a secure localhost-only default while allowing operators to add trusted
+    hosts (--allowed-host) or disable the check on an isolated network
+    (--allow-any-host).
+
+    Each host is registered both bare ("localhost") and with a port wildcard
+    ("localhost:*"), since the SDK matches the Host header exactly or via a
+    trailing ":*" wildcard. Matching http/https origins are also allowed for
+    browser-based clients; origin validation passes when no Origin header is
+    present (the typical server-side MCP client case).
+    """
+    if disable_protection:
+        # Only safe on a trusted/isolated network (e.g. firewalled, VPN-only).
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    names = list(_DEFAULT_ALLOWED_HOST_NAMES) + list(extra_hosts or [])
+    allowed_hosts: list[str] = []
+    allowed_origins: list[str] = []
+    for name in names:
+        allowed_hosts += [name, f"{name}:*"]
+        for scheme in ("http", "https"):
+            allowed_origins += [f"{scheme}://{name}", f"{scheme}://{name}:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
+def _set_server_version(mcp: FastMCP) -> None:
+    """Report wikimcp's own version in serverInfo (not the MCP SDK's).
+
+    FastMCP does not pass a version to the underlying low-level Server, so it
+    falls back to the installed ``mcp`` package version in
+    ``create_initialization_options``. Set it explicitly to wikimcp's version.
+    """
+    from .. import __version__
+
+    mcp._mcp_server.version = __version__
 
 
 # ---------------------------------------------------------------------------
@@ -66,16 +124,30 @@ def _format_push_warnings(warnings: list) -> str:
 # Local server factory (single-user, no auth)
 # ---------------------------------------------------------------------------
 
-def create_local_server(wiki_dir: Path) -> FastMCP:
+def create_local_server(
+    wiki_dir: Path,
+    allowed_hosts: list[str] | None = None,
+    disable_host_check: bool = False,
+) -> FastMCP:
     """
     Create a FastMCP server for local/single-user mode.
 
     All tool calls go directly to the fixed wiki_dir. No authentication.
     Suitable for stdio transport (Claude Desktop, LM Studio, Gemini CLI)
     or local HTTP.
+
+    ``allowed_hosts`` adds trusted Host header values for the streamable-HTTP
+    transport; ``disable_host_check`` turns off DNS-rebinding protection
+    entirely (only safe on an isolated network). Both are ignored for stdio.
     """
     wiki_dir = Path(wiki_dir)
-    mcp = FastMCP("wikimcp")
+    mcp = FastMCP(
+        "wikimcp",
+        transport_security=http_transport_security(
+            allowed_hosts, disable_protection=disable_host_check
+        ),
+    )
+    _set_server_version(mcp)
 
     @mcp.tool()
     def wiki_info() -> str:
@@ -171,7 +243,11 @@ def create_local_server(wiki_dir: Path) -> FastMCP:
 # Server mode factory (multi-user, HTTP with auth)
 # ---------------------------------------------------------------------------
 
-def create_server_mode(config_path: Path):
+def create_server_mode(
+    config_path: Path,
+    allowed_hosts: list[str] | None = None,
+    disable_host_check: bool = False,
+):
     """
     Create a FastMCP server + FastAPI app for multi-user server mode.
 
@@ -182,6 +258,10 @@ def create_server_mode(config_path: Path):
 
     Each tool resolves the calling user from their bearer token, then
     routes the call to that user's wiki directory.
+
+    ``allowed_hosts`` adds trusted Host header values for the streamable-HTTP
+    transport; ``disable_host_check`` turns off DNS-rebinding protection
+    entirely (only safe on an isolated network).
     """
     # Import FastAPI here so it's only required in server mode
     try:
@@ -236,7 +316,13 @@ def create_server_mode(config_path: Path):
         return username, wiki_dir, auto_push, config
 
     # --- Build the FastMCP instance ---
-    mcp = FastMCP("wikimcp")
+    mcp = FastMCP(
+        "wikimcp",
+        transport_security=http_transport_security(
+            allowed_hosts, disable_protection=disable_host_check
+        ),
+    )
+    _set_server_version(mcp)
 
     # We need to pass per-request context (wiki_dir, auto_push) to the tools.
     # FastMCP's Context provides access to the raw MCP request but not HTTP headers.

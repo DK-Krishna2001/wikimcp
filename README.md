@@ -227,10 +227,10 @@ Bearer token per user. Tokens stored as SHA-256 hashes — never plaintext. Mana
 
 ```
 wikimcp init [--wiki-dir ~/llm-wiki]
-wikimcp serve [--wiki-dir] [--transport stdio|http] [--host] [--port]
+wikimcp serve [--wiki-dir] [--transport stdio|http] [--host] [--port] [--allowed-host ...] [--allow-any-host]
 
 wikimcp server init [--dir /data/wikimcp] [--port 8765]
-wikimcp server start [--dir] [--port] [--host]
+wikimcp server start [--dir] [--port] [--host] [--allowed-host ...] [--allow-any-host]
 wikimcp server stop
 wikimcp server status [--dir]
 
@@ -257,6 +257,41 @@ wikimcp install-service [--dir] [--port]
 | stdio | `wikimcp serve` (default) | Claude Desktop, LM Studio, Gemini CLI, Claude Code |
 | HTTP | `wikimcp serve --transport http` | ChatGPT, claude.ai (via ngrok) |
 | HTTP | `wikimcp server start` | All clients (always-on multi-user server) |
+
+### Host header allowlist (HTTP transport)
+
+The MCP SDK enforces DNS-rebinding protection on the streamable-HTTP transport: by
+default it accepts the `Host` header only when it is `localhost` or `127.0.0.1`
+(with any port). Any other host — including `host.docker.internal` from a client
+running in a Docker container — is rejected with **HTTP 421 "Invalid Host header"**.
+
+To allow additional hosts, pass `--allowed-host` (repeatable) to `wikimcp serve`
+or `wikimcp server start`:
+
+```bash
+# Allow a LibreChat / Docker client connecting via host.docker.internal
+wikimcp serve --transport http --host 0.0.0.0 --port 8765 \
+    --wiki-dir ~/llm-wiki \
+    --allowed-host host.docker.internal --allowed-host 100.85.70.2
+```
+
+On a fully trusted/isolated network you can disable the check entirely with
+`--allow-any-host`. **Security note:** `--allow-any-host` turns off host/origin
+validation completely — only use it behind a firewall or VPN, never on a host
+exposed to untrusted networks.
+
+> **Upgrade note:** Versions before 0.1.5 had a different (and in some
+> deployments hot-patched) host policy. Starting in 0.1.5 the default is
+> localhost-only, so if you connect from a non-localhost client you **must**
+> add `--allowed-host <that-host>` (or `--allow-any-host`). Operators upgrading
+> an existing deployment must update their launch command — e.g. the systemd
+> `ExecStart`:
+>
+> ```
+> wikimcp serve --transport http --host 0.0.0.0 --port 8765 \
+>     --wiki-dir /home/ubuntu/wikimcp-data/users/mohith \
+>     --allowed-host host.docker.internal --allowed-host 100.85.70.2
+> ```
 
 ---
 

@@ -210,7 +210,28 @@ def cmd_init(wiki_dir: str) -> None:
     type=int,
     help="Port to listen on (http transport only).",
 )
-def cmd_serve(wiki_dir: str, transport: str, host: str, port: int) -> None:
+@click.option(
+    "--allowed-host",
+    "allowed_hosts",
+    multiple=True,
+    help="Extra Host header value(s) to accept over HTTP (repeatable). "
+         "e.g. --allowed-host host.docker.internal",
+)
+@click.option(
+    "--allow-any-host",
+    is_flag=True,
+    default=False,
+    help="Disable DNS-rebinding host validation entirely. "
+         "Only use on a trusted/isolated network.",
+)
+def cmd_serve(
+    wiki_dir: str,
+    transport: str,
+    host: str,
+    port: int,
+    allowed_hosts: tuple[str, ...],
+    allow_any_host: bool,
+) -> None:
     """Start the local MCP server (single-user, no auth).
 
     stdio (default): for Claude Desktop, LM Studio, Gemini CLI, Claude Code.
@@ -227,7 +248,11 @@ def cmd_serve(wiki_dir: str, transport: str, host: str, port: int) -> None:
             "  Run [bold]wikimcp init[/bold] first."
         )
 
-    mcp = create_local_server(wiki_path)
+    mcp = create_local_server(
+        wiki_path,
+        allowed_hosts=list(allowed_hosts),
+        disable_host_check=allow_any_host,
+    )
 
     if transport == "stdio":
         mcp.run(transport="stdio")
@@ -311,7 +336,27 @@ def server_init(server_dir: str, port: int) -> None:
     default=None,
     help="Host to bind to (overrides config file).",
 )
-def server_start(server_dir: str, port: Optional[int], host: Optional[str]) -> None:
+@click.option(
+    "--allowed-host",
+    "allowed_hosts",
+    multiple=True,
+    help="Extra Host header value(s) to accept (repeatable). "
+         "e.g. --allowed-host host.docker.internal",
+)
+@click.option(
+    "--allow-any-host",
+    is_flag=True,
+    default=False,
+    help="Disable DNS-rebinding host validation entirely. "
+         "Only use on a trusted/isolated network.",
+)
+def server_start(
+    server_dir: str,
+    port: Optional[int],
+    host: Optional[str],
+    allowed_hosts: tuple[str, ...],
+    allow_any_host: bool,
+) -> None:
     """Start the multi-user HTTP MCP server + web reader."""
     from wikimcp.server.mcp_server import create_server_mode
     from wikimcp.server.web_reader import create_web_reader, mount_static
@@ -347,7 +392,11 @@ def server_start(server_dir: str, port: Optional[int], host: Optional[str]) -> N
     console.print(f"  Health check:  [cyan]http://{listen_host}:{listen_port}/health[/cyan]")
 
     try:
-        mcp, app = create_server_mode(config_path)
+        mcp, app = create_server_mode(
+            config_path,
+            allowed_hosts=list(allowed_hosts),
+            disable_host_check=allow_any_host,
+        )
     except Exception as exc:
         _abort(f"Failed to create server: {exc}")
 

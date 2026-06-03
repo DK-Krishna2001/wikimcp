@@ -2,6 +2,24 @@
 
 All notable changes to wikimcp will be documented in this file.
 
+## [0.1.5] - 2026-06-03
+
+### Fixed
+- streamable-HTTP transport returned HTTP 421 "Invalid Host header" for any
+  Host other than localhost:<port> (e.g. host.docker.internal from a Docker
+  client). The DNS-rebinding Host allowlist is now configurable via
+  `--allowed-host` (repeatable) and `--allow-any-host`, defaulting to localhost only.
+- `serverInfo.version` reported the MCP SDK version instead of wikimcp's own
+  version; it now reports the wikimcp package version.
+
+### Upgrade note
+- If you run wikimcp over HTTP and connect from a non-localhost client
+  (e.g. a Docker container via host.docker.internal), you MUST now pass
+  `--allowed-host <that-host>` (or `--allow-any-host` on an isolated network),
+  or requests will be rejected with HTTP 421. Operators upgrading an existing
+  deployment must update their launch command (e.g. the systemd `ExecStart`)
+  to add the appropriate `--allowed-host` flags.
+
 ## [0.1.1] - 2026-04-14
 
 ### Added

@@ -19,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ..wiki import operations
+from ..wiki import retrieval
 from ..wiki.git_layer import push_auto_remotes
 from .auth import extract_token, validate_token, update_last_active
 from .router import resolve_wiki_dir, get_auto_push_remotes
@@ -110,6 +111,22 @@ def _format_search_results(results: list) -> str:
         lines.append(f"### {result['path']}")
         for match in result["matches"]:
             lines.append(f"  Line {match['line_number']}: {match['line']}")
+    return "\n".join(lines)
+
+
+def _format_page_results(results: list) -> str:
+    """Format ranked page retrieval results as a readable string."""
+    if not results:
+        return "No relevant pages found."
+
+    lines = []
+    for i, result in enumerate(results, start=1):
+        lines.append(f"{i}. {result['path']} (score: {result['score']:.4f})")
+        lines.append(f"   Title: {result['title']}")
+        if result.get("matched_fields"):
+            lines.append(f"   Matched: {', '.join(result['matched_fields'])}")
+        if result.get("snippet"):
+            lines.append(f"   Snippet: {result['snippet']}")
     return "\n".join(lines)
 
 
@@ -214,6 +231,23 @@ def create_local_server(
             results = operations.search_wiki(wiki_dir, query, case_sensitive)
             return _format_search_results(results)
         except (ValueError, Exception) as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def search_pages(query: str, limit: int = 10) -> str:
+        """Rank wiki pages by relevance and return compact snippets."""
+        try:
+            results = retrieval.search_pages(wiki_dir, query, limit)
+            return _format_page_results(results)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def retrieve_context(query: str, limit: int = 5) -> str:
+        """Return contextual snippets from the most relevant wiki pages."""
+        try:
+            return retrieval.retrieve_context(wiki_dir, query, limit)
+        except Exception as exc:
             return f"Error: {exc}"
 
     @mcp.tool()
@@ -424,6 +458,25 @@ def create_server_mode(
             wiki_dir = _ctx()["wiki_dir"]
             results = operations.search_wiki(wiki_dir, query, case_sensitive)
             return _format_search_results(results)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def search_pages(query: str, limit: int = 10) -> str:
+        """Rank wiki pages by relevance and return compact snippets."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            results = retrieval.search_pages(wiki_dir, query, limit)
+            return _format_page_results(results)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def retrieve_context(query: str, limit: int = 5) -> str:
+        """Return contextual snippets from the most relevant wiki pages."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return retrieval.retrieve_context(wiki_dir, query, limit)
         except Exception as exc:
             return f"Error: {exc}"
 

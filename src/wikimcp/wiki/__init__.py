@@ -15,6 +15,10 @@ from .operations import (
     append_log,
     delete_page,
 )
+from .retrieval import (
+    search_pages,
+    retrieve_context,
+)
 from .git_layer import (
     init_repo,
     auto_commit,
@@ -40,6 +44,8 @@ __all__ = [
     "search_wiki",
     "append_log",
     "delete_page",
+    "search_pages",
+    "retrieve_context",
     # git_layer
     "init_repo",
     "auto_commit",

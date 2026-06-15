@@ -20,7 +20,7 @@ Released. The core package is complete and usable.
 
 Making the wiki more powerful and easier to deploy.
 
-- [ ] **Embedding search / vector search** — hybrid BM25 + vector search for better query results as wikis grow beyond what index.md scanning can handle
+- [ ] **Embedding search / vector search** — hybrid BM25 + vector search for better query results as wikis grow beyond what index.md scanning can handle *(groundwork shipped: `search_pages`/`retrieve_context` BM25-style ranked retrieval; embedding index + vector similarity still pending)*
 - [ ] **OAuth / SSO** — Google, GitHub, or generic OIDC login instead of bearer tokens only
 - [ ] **Self-serve signup** — users create their own accounts via a web form instead of admin running `add-user`
 - [ ] **Webhooks** — notify external services (Slack, Discord, n8n) on wiki changes

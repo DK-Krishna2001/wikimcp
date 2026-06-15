@@ -163,7 +163,7 @@ Or set up a cron job to auto-push every 5 minutes:
 | `write_page` | `path`, `content` | Create or overwrite a wiki page and auto-commit. |
 | `read_page` | `path` | Read a wiki page. |
 | `list_pages` | `subdirectory?` | List all pages (or a subdirectory). |
-| `search_wiki` | `query`, `case_sensitive?` | Full-text search across all pages. |
+| `search_wiki` | `query`, `case_sensitive?` | Hybrid BM25 + vector search when index exists; regex fallback otherwise. |
 | `search_pages` | `query`, `limit?` | Rank wiki pages by relevance and return compact snippets. |
 | `retrieve_context` | `query`, `limit?` | Return contextual snippets from the most relevant pages. |
 | `append_log` | `entry`, `operation?` | Append timestamped entry to `wiki/log.md` and auto-commit. |
@@ -229,6 +229,7 @@ Bearer token per user. Tokens stored as SHA-256 hashes — never plaintext. Mana
 
 ```
 wikimcp init [--wiki-dir ~/llm-wiki]
+wikimcp rebuild-search-index [--wiki-dir ~/llm-wiki]
 wikimcp serve [--wiki-dir] [--transport stdio|http] [--host] [--port] [--allowed-host ...] [--allow-any-host]
 
 wikimcp server init [--dir /data/wikimcp] [--port 8765]

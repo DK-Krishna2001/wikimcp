@@ -141,7 +141,7 @@ In server mode, the user is identified from their bearer token before any tool r
 | `write_page` | `path`, `content` | Create or overwrite a wiki page |
 | `read_page` | `path` | Read a wiki page |
 | `list_pages` | `subdirectory?` | List all pages (or a subdirectory) |
-| `search_wiki` | `query`, `case_sensitive?` | Full-text search across all pages |
+| `search_wiki` | `query`, `case_sensitive?` | Hybrid BM25 + vector search when index exists; regex fallback otherwise |
 | `search_pages` | `query`, `limit?` | Rank wiki pages by relevance and return compact snippets |
 | `retrieve_context` | `query`, `limit?` | Return contextual snippets from the most relevant pages |
 | `append_log` | `entry`, `operation?` | Append timestamped entry to log.md |

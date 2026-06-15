@@ -54,6 +54,17 @@ def test_server_subcommand_help() -> None:
     assert result.exit_code == 0
 
 
+def test_rebuild_search_index_command(tmp_path: Path) -> None:
+    runner = CliRunner()
+    wiki_dir = tmp_path / "my-wiki"
+    init_result = runner.invoke(main, ["init", "--wiki-dir", str(wiki_dir)])
+    assert init_result.exit_code == 0, init_result.output
+
+    result = runner.invoke(main, ["rebuild-search-index", "--wiki-dir", str(wiki_dir)])
+    assert result.exit_code == 0, result.output
+    assert (wiki_dir / ".wikimcp_search.sqlite3").exists()
+
+
 def test_add_user_help() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["add-user", "--help"])

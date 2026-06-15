@@ -10,6 +10,7 @@ from wikimcp.wiki.operations import (
     read_page,
     list_pages,
     search_wiki,
+    rebuild_search_index,
     delete_page,
 )
 
@@ -94,6 +95,34 @@ def test_search_wiki_case_insensitive(wiki_dir: Path) -> None:
     write_page(wiki_dir, "topics/python.md", "Python is awesome")
     results = search_wiki(wiki_dir, "python is awesome", case_sensitive=False)
     assert len(results) >= 1
+
+
+def test_search_wiki_falls_back_without_index(wiki_dir: Path) -> None:
+    write_page(
+        wiki_dir,
+        "topics/authentication.md",
+        "# Authentication\n\nAuthentication protects API calls.",
+    )
+
+    # Regex fallback requires an exact line match.
+    fallback_results = search_wiki(wiki_dir, "authenticating api calls")
+    assert fallback_results == []
+
+    rebuild_search_index(wiki_dir)
+
+    hybrid_results = search_wiki(wiki_dir, "authenticating api calls")
+    assert any(result["path"] == "topics/authentication.md" for result in hybrid_results)
+    assert "score" in hybrid_results[0]
+    assert "vector_score" in hybrid_results[0]
+
+
+def test_rebuild_search_index_creates_sqlite_file(wiki_dir: Path) -> None:
+    write_page(wiki_dir, "topics/python.md", "# Python\n\nGreat language.")
+
+    stats = rebuild_search_index(wiki_dir)
+
+    assert stats["indexed_pages"] >= 1
+    assert Path(stats["index_path"]).exists()
 
 
 def test_delete_page(wiki_dir: Path) -> None:

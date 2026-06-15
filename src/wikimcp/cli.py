@@ -179,6 +179,38 @@ def cmd_init(wiki_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# rebuild-search-index
+# ---------------------------------------------------------------------------
+
+
+@main.command("rebuild-search-index")
+@click.option(
+    "--wiki-dir",
+    default=str(DEFAULT_WIKI_DIR),
+    show_default=True,
+    help="Path to the wiki directory.",
+)
+def cmd_rebuild_search_index(wiki_dir: str) -> None:
+    """Rebuild the optional SQLite hybrid search index for a local wiki."""
+    from wikimcp.wiki.operations import rebuild_search_index
+
+    wiki_path = _expand(wiki_dir)
+    if not wiki_path.exists():
+        _abort(
+            f"Wiki directory does not exist: {wiki_path}\n"
+            "  Run [bold]wikimcp init[/bold] first."
+        )
+
+    try:
+        stats = rebuild_search_index(wiki_path)
+    except Exception as exc:
+        _abort(f"Failed to rebuild search index: {exc}")
+
+    _ok(f"Search index rebuilt ({stats['indexed_pages']} pages).")
+    console.print(f"  Index file: [cyan]{stats['index_path']}[/cyan]")
+
+
+# ---------------------------------------------------------------------------
 # serve — local MCP server
 # ---------------------------------------------------------------------------
 

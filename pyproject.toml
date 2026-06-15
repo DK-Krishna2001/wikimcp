@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wikimcp"
-version = "0.1.7"
+version = "0.1.8"
 description = "Git-backed multi-user wiki MCP server — LTM for any AI"
 authors = [
   { name="Mohith Das", email="mohith@tuta.io" }

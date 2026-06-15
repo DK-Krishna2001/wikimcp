@@ -150,6 +150,14 @@ In server mode, the user is identified from their bearer token before any tool r
 Every `write_page`, `update_index`, `append_log`, and `delete_page` call
 triggers an auto git commit with message: `"wiki: <operation> <path>"`.
 
+The optional hybrid search index (`.wikimcp_search.sqlite3`, created by
+`rebuild-search-index`) is kept in sync incrementally by those same mutating
+operations, so newly written/edited pages are searchable and deleted pages drop
+out without a manual rebuild. The index file is git-ignored and never committed.
+`search_wiki` falls back to a regex scan whenever the index is absent or yields
+no candidates, so substring/partial-word queries the token index can't represent
+still work.
+
 ---
 
 ## Auth

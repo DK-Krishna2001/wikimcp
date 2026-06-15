@@ -39,6 +39,15 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _SEARCH_INDEX_FILENAME = ".wikimcp_search.sqlite3"
 _EMBEDDING_DIM = 256
 
+# Hybrid ranking parameters.
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+_HYBRID_BM25_WEIGHT = 0.65
+_HYBRID_VECTOR_WEIGHT = 0.35
+# Minimum cosine similarity for a page with no lexical (BM25) hit to still be
+# considered a semantic candidate.
+_VECTOR_MATCH_THRESHOLD = 0.20
+
 
 def _search_index_path(wiki_dir: Path) -> Path:
     return Path(wiki_dir) / _SEARCH_INDEX_FILENAME
@@ -150,10 +159,165 @@ def _search_wiki_regex(
                 matches.append({"line": line, "line_number": line_number})
 
         if matches:
-            rel_path = str(page_path.relative_to(wiki_sub))
-            results.append({"path": rel_path, "matches": matches})
+            rel_path = page_path.relative_to(wiki_sub).as_posix()
+            results.append(
+                {
+                    "path": rel_path,
+                    "matches": matches,
+                    # Score fields are only meaningful for index-backed hybrid
+                    # search; kept here (as None) so both code paths return the
+                    # same result schema.
+                    "score": None,
+                    "bm25_score": None,
+                    "vector_score": None,
+                }
+            )
 
     return results
+
+
+def _ensure_index_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS documents (
+            path TEXT PRIMARY KEY,
+            token_counts_json TEXT NOT NULL,
+            token_count INTEGER NOT NULL,
+            preview_line TEXT NOT NULL,
+            preview_line_number INTEGER NOT NULL,
+            vector_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _index_document(conn: sqlite3.Connection, rel_path: str, text: str) -> None:
+    """Insert or update a single page in the search index."""
+    tokens = _tokenize(text)
+    token_counts: dict[str, int] = {}
+    for token in tokens:
+        token_counts[token] = token_counts.get(token, 0) + 1
+
+    preview, preview_line_number = _preview_line(text)
+    vector = _embed_tokens(tokens)
+    conn.execute(
+        """
+        INSERT INTO documents (
+            path,
+            token_counts_json,
+            token_count,
+            preview_line,
+            preview_line_number,
+            vector_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            token_counts_json=excluded.token_counts_json,
+            token_count=excluded.token_count,
+            preview_line=excluded.preview_line,
+            preview_line_number=excluded.preview_line_number,
+            vector_json=excluded.vector_json
+        """,
+        (
+            rel_path,
+            json.dumps(token_counts, sort_keys=True),
+            len(tokens),
+            preview,
+            preview_line_number,
+            json.dumps(vector, separators=(",", ":")),
+        ),
+    )
+
+
+def _touch_index_metadata(conn: sqlite3.Connection) -> None:
+    built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn.execute(
+        """
+        INSERT INTO metadata (key, value)
+        VALUES ('built_at', ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        """,
+        (built_at,),
+    )
+
+
+def _ensure_search_index_ignored(wiki_dir: Path) -> None:
+    """
+    Make sure the SQLite search index is git-ignored in the wiki repo.
+
+    The index lives at the wiki root and is rebuilt locally, so it must never be
+    committed (it would churn a binary blob into history on every auto-commit).
+    The trailing '*' also covers SQLite's -wal/-shm/-journal sidecar files.
+    """
+    gitignore = Path(wiki_dir) / ".gitignore"
+    entry = f"{_SEARCH_INDEX_FILENAME}*"
+    try:
+        existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    except OSError:
+        return
+
+    lines = existing.splitlines()
+    if entry in lines or _SEARCH_INDEX_FILENAME in lines:
+        return
+
+    new_content = existing
+    if new_content and not new_content.endswith("\n"):
+        new_content += "\n"
+    new_content += entry + "\n"
+    try:
+        gitignore.write_text(new_content, encoding="utf-8")
+    except OSError:
+        return
+
+
+def _index_page_key(path: str) -> str:
+    """Normalise a wiki-relative page path to its index key (POSIX form)."""
+    return Path(path).as_posix()
+
+
+def _sync_index_after_write(wiki_dir: Path, path: str, content: str) -> None:
+    """Keep the index in sync when a page is created or overwritten.
+
+    No-op when no index exists yet — the index is opt-in via
+    rebuild_search_index(). When one does exist, this keeps newly written or
+    edited pages searchable without a manual rebuild.
+    """
+    index_path = _search_index_path(wiki_dir)
+    if not index_path.exists():
+        return
+    _ensure_search_index_ignored(wiki_dir)
+    conn = sqlite3.connect(index_path)
+    try:
+        _ensure_index_schema(conn)
+        _index_document(conn, _index_page_key(path), content)
+        _touch_index_metadata(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _sync_index_after_delete(wiki_dir: Path, path: str) -> None:
+    """Drop a page from the index when it is deleted (no-op without an index)."""
+    index_path = _search_index_path(wiki_dir)
+    if not index_path.exists():
+        return
+    conn = sqlite3.connect(index_path)
+    try:
+        conn.execute(
+            "DELETE FROM documents WHERE path = ?", (_index_page_key(path),)
+        )
+        _touch_index_metadata(conn)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def rebuild_search_index(wiki_dir: Path) -> Dict[str, Any]:
@@ -161,7 +325,9 @@ def rebuild_search_index(wiki_dir: Path) -> Dict[str, Any]:
     Build or refresh the optional hybrid search index.
 
     The index stores per-page token statistics and compact vector embeddings in
-    SQLite so search can avoid rescanning markdown files on each query.
+    SQLite so search can avoid rescanning markdown files on each query. Once
+    built, the index is kept in sync incrementally by write_page/update_index/
+    append_log/delete_page; call this to do a full rebuild from scratch.
     """
     wiki_dir = Path(wiki_dir)
     wiki_sub = _wiki_subdir(wiki_dir)
@@ -169,28 +335,10 @@ def rebuild_search_index(wiki_dir: Path) -> Dict[str, Any]:
         return {"indexed_pages": 0, "index_path": str(_search_index_path(wiki_dir))}
 
     index_path = _search_index_path(wiki_dir)
+    _ensure_search_index_ignored(wiki_dir)
     conn = sqlite3.connect(index_path)
     try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS documents (
-                path TEXT PRIMARY KEY,
-                token_counts_json TEXT NOT NULL,
-                token_count INTEGER NOT NULL,
-                preview_line TEXT NOT NULL,
-                preview_line_number INTEGER NOT NULL,
-                vector_json TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS metadata (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
+        _ensure_index_schema(conn)
 
         seen_paths: list[str] = []
         indexed_pages = 0
@@ -202,41 +350,8 @@ def rebuild_search_index(wiki_dir: Path) -> Dict[str, Any]:
             except (OSError, UnicodeDecodeError):
                 continue
 
-            rel_path = str(page_path.relative_to(wiki_sub))
-            tokens = _tokenize(text)
-            token_counts: dict[str, int] = {}
-            for token in tokens:
-                token_counts[token] = token_counts.get(token, 0) + 1
-
-            preview, preview_line_number = _preview_line(text)
-            vector = _embed_tokens(tokens)
-            conn.execute(
-                """
-                INSERT INTO documents (
-                    path,
-                    token_counts_json,
-                    token_count,
-                    preview_line,
-                    preview_line_number,
-                    vector_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(path) DO UPDATE SET
-                    token_counts_json=excluded.token_counts_json,
-                    token_count=excluded.token_count,
-                    preview_line=excluded.preview_line,
-                    preview_line_number=excluded.preview_line_number,
-                    vector_json=excluded.vector_json
-                """,
-                (
-                    rel_path,
-                    json.dumps(token_counts, sort_keys=True),
-                    len(tokens),
-                    preview,
-                    preview_line_number,
-                    json.dumps(vector, separators=(",", ":")),
-                ),
-            )
+            rel_path = page_path.relative_to(wiki_sub).as_posix()
+            _index_document(conn, rel_path, text)
             seen_paths.append(rel_path)
             indexed_pages += 1
 
@@ -249,15 +364,7 @@ def rebuild_search_index(wiki_dir: Path) -> Dict[str, Any]:
         else:
             conn.execute("DELETE FROM documents")
 
-        built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        conn.execute(
-            """
-            INSERT INTO metadata (key, value)
-            VALUES ('built_at', ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value
-            """,
-            (built_at,),
-        )
+        _touch_index_metadata(conn)
         conn.commit()
     finally:
         conn.close()
@@ -306,8 +413,10 @@ def _search_wiki_hybrid(
     finally:
         conn.close()
 
+    # An empty index can't answer anything — signal the caller to fall back to
+    # the regex scan rather than reporting "no matches".
     if not rows:
-        return []
+        return None
 
     docs: list[dict[str, Any]] = []
     for row in rows:
@@ -326,7 +435,7 @@ def _search_wiki_hybrid(
             continue
 
     if not docs:
-        return []
+        return None
 
     unique_terms = set(query_tokens)
     doc_count = len(docs)
@@ -351,12 +460,19 @@ def _search_wiki_hybrid(
                 continue
             df = doc_freq.get(term, 0)
             idf = math.log(1 + (doc_count - df + 0.5) / (df + 0.5))
-            numerator = tf * (1.5 + 1)
-            denominator = tf + 1.5 * (1 - 0.75 + 0.75 * (doc_len / avg_doc_len))
+            numerator = tf * (_BM25_K1 + 1)
+            denominator = tf + _BM25_K1 * (
+                1 - _BM25_B + _BM25_B * (doc_len / avg_doc_len)
+            )
             bm25 += idf * (numerator / denominator)
 
         vector_score = max(0.0, _cosine_similarity(query_vector, doc["vector"]))
-        if bm25 <= 0.0 and vector_score < 0.20:
+        if bm25 <= 0.0 and vector_score < _VECTOR_MATCH_THRESHOLD:
+            continue
+
+        # Skip pages whose file no longer exists so a stale index can't surface
+        # phantom hits for deleted pages.
+        if not (wiki_sub / doc["path"]).exists():
             continue
 
         scored_docs.append(
@@ -369,35 +485,44 @@ def _search_wiki_hybrid(
             }
         )
 
+    # Nothing matched in the index — fall back to a regex scan so substring or
+    # partial-word queries the token index can't represent still work.
     if not scored_docs:
-        return []
+        return None
 
     max_bm25 = max(doc["bm25_score"] for doc in scored_docs) or 1.0
     for doc in scored_docs:
         bm25_normalized = doc["bm25_score"] / max_bm25 if max_bm25 > 0 else 0.0
-        doc["score"] = 0.65 * bm25_normalized + 0.35 * doc["vector_score"]
+        doc["score"] = (
+            _HYBRID_BM25_WEIGHT * bm25_normalized
+            + _HYBRID_VECTOR_WEIGHT * doc["vector_score"]
+        )
 
     scored_docs.sort(key=lambda item: (-item["score"], item["path"]))
 
     results: list[dict[str, Any]] = []
     for doc in scored_docs:
         page_path = wiki_sub / doc["path"]
-        matches = []
         try:
             text = page_path.read_text(encoding="utf-8")
-            for line_number, line in enumerate(text.splitlines(), start=1):
-                if pattern.search(line):
-                    matches.append({"line": line, "line_number": line_number})
         except (OSError, UnicodeDecodeError):
-            pass
+            # File vanished after the existence check above — skip rather than
+            # emit a phantom hit from the stale index.
+            continue
 
-        if not matches and doc["preview_line"]:
-            matches.append(
-                {
-                    "line": doc["preview_line"],
-                    "line_number": doc["preview_line_number"],
-                }
-            )
+        matches = []
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if pattern.search(line):
+                matches.append({"line": line, "line_number": line_number})
+
+        if not matches:
+            # No literal line match (e.g. a semantic-only hit) — fall back to a
+            # preview line read from the current file, not the stored index.
+            preview, preview_line_number = _preview_line(text)
+            if preview:
+                matches.append(
+                    {"line": preview, "line_number": preview_line_number}
+                )
 
         if not matches:
             continue
@@ -485,6 +610,7 @@ def update_index(wiki_dir: Path, content: str) -> None:
     index_path = _wiki_subdir(wiki_dir) / "index.md"
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(content, encoding="utf-8")
+    _sync_index_after_write(wiki_dir, "index.md", content)
     auto_commit(wiki_dir, "wiki: update_index wiki/index.md")
 
 
@@ -500,6 +626,7 @@ def write_page(wiki_dir: Path, path: str, content: str) -> None:
     page_path = _resolve_page(wiki_dir, path)
     page_path.parent.mkdir(parents=True, exist_ok=True)
     page_path.write_text(content, encoding="utf-8")
+    _sync_index_after_write(wiki_dir, path, content)
     auto_commit(wiki_dir, f"wiki: write_page wiki/{path}")
 
 
@@ -624,6 +751,10 @@ def append_log(
     with log_path.open("a", encoding="utf-8") as fh:
         fh.write(block)
 
+    _sync_index_after_write(
+        wiki_dir, "log.md", log_path.read_text(encoding="utf-8")
+    )
+
     op_label = operation or "log"
     auto_commit(wiki_dir, f"wiki: append_log {op_label} {timestamp}")
 
@@ -648,6 +779,7 @@ def delete_page(wiki_dir: Path, path: str) -> None:
         raise FileNotFoundError(f"Page not found: wiki/{path}")
 
     page_path.unlink()
+    _sync_index_after_delete(wiki_dir, path)
 
     # Remove any now-empty parent directories (but never remove wiki/ itself)
     wiki_sub = _wiki_subdir(wiki_dir)

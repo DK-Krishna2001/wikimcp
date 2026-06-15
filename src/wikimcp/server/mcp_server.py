@@ -200,7 +200,7 @@ def create_local_server(
         try:
             operations.write_page(wiki_dir, path, content)
             return f"Page '{path}' written successfully."
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             return f"Error: {exc}"
 
     @mcp.tool()
@@ -221,7 +221,7 @@ def create_local_server(
             if not pages:
                 return "No pages found."
             return "\n".join(pages)
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             return f"Error: {exc}"
 
     @mcp.tool()
@@ -230,7 +230,7 @@ def create_local_server(
         try:
             results = operations.search_wiki(wiki_dir, query, case_sensitive)
             return _format_search_results(results)
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             return f"Error: {exc}"
 
     @mcp.tool()

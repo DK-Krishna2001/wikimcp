@@ -229,7 +229,7 @@ Bearer token per user. Tokens stored as SHA-256 hashes — never plaintext. Mana
 
 ```
 wikimcp init [--wiki-dir ~/llm-wiki]
-wikimcp rebuild-search-index [--wiki-dir ~/llm-wiki]
+wikimcp rebuild-search-index [--wiki-dir ~/llm-wiki]   # full rebuild of the hybrid search index
 wikimcp serve [--wiki-dir] [--transport stdio|http] [--host] [--port] [--allowed-host ...] [--allow-any-host]
 
 wikimcp server init [--dir /data/wikimcp] [--port 8765]

@@ -14,7 +14,11 @@ Path conventions:
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -29,6 +33,65 @@ from .git_layer import auto_commit
 def _wiki_subdir(wiki_dir: Path) -> Path:
     """Return the wiki/ subdirectory path."""
     return Path(wiki_dir) / "wiki"
+
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_SEARCH_INDEX_FILENAME = ".wikimcp_search.sqlite3"
+_EMBEDDING_DIM = 256
+
+
+def _search_index_path(wiki_dir: Path) -> Path:
+    return Path(wiki_dir) / _SEARCH_INDEX_FILENAME
+
+
+def _tokenize(text: str) -> list[str]:
+    return [m.group(0).lower() for m in _TOKEN_RE.finditer(text)]
+
+
+def _stable_bucket(value: str, dimensions: int = _EMBEDDING_DIM) -> int:
+    digest = hashlib.blake2b(value.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False) % dimensions
+
+
+def _token_ngrams(token: str, n: int = 3) -> list[str]:
+    if len(token) <= n:
+        return [token]
+    return [token[i : i + n] for i in range(len(token) - n + 1)]
+
+
+def _embed_tokens(tokens: list[str], dimensions: int = _EMBEDDING_DIM) -> list[float]:
+    if not tokens:
+        return [0.0] * dimensions
+
+    vector = [0.0] * dimensions
+    for token in tokens:
+        token_bucket = _stable_bucket(f"t:{token}", dimensions)
+        vector[token_bucket] += 2.0
+
+        for ngram in _token_ngrams(token):
+            ngram_bucket = _stable_bucket(f"g:{ngram}", dimensions)
+            vector[ngram_bucket] += 1.0
+
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0.0:
+        return vector
+    return [value / norm for value in vector]
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right:
+        return 0.0
+    if len(left) != len(right):
+        return 0.0
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _preview_line(text: str) -> tuple[str, int]:
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped:
+            return stripped, line_number
+    return "", 1
 
 
 def _validate_path(path: str) -> None:
@@ -58,6 +121,298 @@ def _resolve_page(wiki_dir: Path, path: str) -> Path:
     """
     _validate_path(path)
     return _wiki_subdir(wiki_dir) / path
+
+
+def _search_wiki_regex(
+    wiki_sub: Path,
+    query: str,
+    *,
+    case_sensitive: bool = False,
+) -> List[Dict[str, Any]]:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        pattern = re.compile(re.escape(query), flags)
+    except re.error as exc:
+        raise ValueError(f"Invalid search query: {exc}") from exc
+
+    results = []
+    for page_path in sorted(wiki_sub.rglob("*.md")):
+        if any(part.startswith(".") for part in page_path.parts):
+            continue
+        try:
+            text = page_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        matches = []
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if pattern.search(line):
+                matches.append({"line": line, "line_number": line_number})
+
+        if matches:
+            rel_path = str(page_path.relative_to(wiki_sub))
+            results.append({"path": rel_path, "matches": matches})
+
+    return results
+
+
+def rebuild_search_index(wiki_dir: Path) -> Dict[str, Any]:
+    """
+    Build or refresh the optional hybrid search index.
+
+    The index stores per-page token statistics and compact vector embeddings in
+    SQLite so search can avoid rescanning markdown files on each query.
+    """
+    wiki_dir = Path(wiki_dir)
+    wiki_sub = _wiki_subdir(wiki_dir)
+    if not wiki_sub.exists():
+        return {"indexed_pages": 0, "index_path": str(_search_index_path(wiki_dir))}
+
+    index_path = _search_index_path(wiki_dir)
+    conn = sqlite3.connect(index_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+                path TEXT PRIMARY KEY,
+                token_counts_json TEXT NOT NULL,
+                token_count INTEGER NOT NULL,
+                preview_line TEXT NOT NULL,
+                preview_line_number INTEGER NOT NULL,
+                vector_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+
+        seen_paths: list[str] = []
+        indexed_pages = 0
+        for page_path in sorted(wiki_sub.rglob("*.md")):
+            if any(part.startswith(".") for part in page_path.parts):
+                continue
+            try:
+                text = page_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            rel_path = str(page_path.relative_to(wiki_sub))
+            tokens = _tokenize(text)
+            token_counts: dict[str, int] = {}
+            for token in tokens:
+                token_counts[token] = token_counts.get(token, 0) + 1
+
+            preview, preview_line_number = _preview_line(text)
+            vector = _embed_tokens(tokens)
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    path,
+                    token_counts_json,
+                    token_count,
+                    preview_line,
+                    preview_line_number,
+                    vector_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    token_counts_json=excluded.token_counts_json,
+                    token_count=excluded.token_count,
+                    preview_line=excluded.preview_line,
+                    preview_line_number=excluded.preview_line_number,
+                    vector_json=excluded.vector_json
+                """,
+                (
+                    rel_path,
+                    json.dumps(token_counts, sort_keys=True),
+                    len(tokens),
+                    preview,
+                    preview_line_number,
+                    json.dumps(vector, separators=(",", ":")),
+                ),
+            )
+            seen_paths.append(rel_path)
+            indexed_pages += 1
+
+        if seen_paths:
+            placeholders = ", ".join("?" for _ in seen_paths)
+            conn.execute(
+                f"DELETE FROM documents WHERE path NOT IN ({placeholders})",
+                seen_paths,
+            )
+        else:
+            conn.execute("DELETE FROM documents")
+
+        built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            """
+            INSERT INTO metadata (key, value)
+            VALUES ('built_at', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (built_at,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "indexed_pages": indexed_pages,
+        "index_path": str(index_path),
+    }
+
+
+def _search_wiki_hybrid(
+    wiki_dir: Path,
+    query: str,
+    *,
+    case_sensitive: bool = False,
+) -> Optional[List[Dict[str, Any]]]:
+    index_path = _search_index_path(wiki_dir)
+    if not index_path.exists():
+        return None
+
+    wiki_sub = _wiki_subdir(wiki_dir)
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return _search_wiki_regex(wiki_sub, query, case_sensitive=case_sensitive)
+
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        pattern = re.compile(re.escape(query), flags)
+    except re.error as exc:
+        raise ValueError(f"Invalid search query: {exc}") from exc
+
+    conn = sqlite3.connect(index_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                path,
+                token_counts_json,
+                token_count,
+                preview_line,
+                preview_line_number,
+                vector_json
+            FROM documents
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return []
+
+    docs: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            docs.append(
+                {
+                    "path": row[0],
+                    "token_counts": json.loads(row[1]),
+                    "token_count": int(row[2]),
+                    "preview_line": row[3],
+                    "preview_line_number": int(row[4]),
+                    "vector": [float(value) for value in json.loads(row[5])],
+                }
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+    if not docs:
+        return []
+
+    unique_terms = set(query_tokens)
+    doc_count = len(docs)
+    avg_doc_len = (
+        sum(max(doc["token_count"], 1) for doc in docs) / max(doc_count, 1)
+    ) or 1.0
+    doc_freq = {
+        term: sum(1 for doc in docs if doc["token_counts"].get(term, 0) > 0)
+        for term in unique_terms
+    }
+
+    query_vector = _embed_tokens(query_tokens)
+
+    scored_docs: list[dict[str, Any]] = []
+    for doc in docs:
+        token_counts = doc["token_counts"]
+        doc_len = max(doc["token_count"], 1)
+        bm25 = 0.0
+        for term in unique_terms:
+            tf = token_counts.get(term, 0)
+            if tf <= 0:
+                continue
+            df = doc_freq.get(term, 0)
+            idf = math.log(1 + (doc_count - df + 0.5) / (df + 0.5))
+            numerator = tf * (1.5 + 1)
+            denominator = tf + 1.5 * (1 - 0.75 + 0.75 * (doc_len / avg_doc_len))
+            bm25 += idf * (numerator / denominator)
+
+        vector_score = max(0.0, _cosine_similarity(query_vector, doc["vector"]))
+        if bm25 <= 0.0 and vector_score < 0.20:
+            continue
+
+        scored_docs.append(
+            {
+                "path": doc["path"],
+                "bm25_score": bm25,
+                "vector_score": vector_score,
+                "preview_line": doc["preview_line"],
+                "preview_line_number": doc["preview_line_number"],
+            }
+        )
+
+    if not scored_docs:
+        return []
+
+    max_bm25 = max(doc["bm25_score"] for doc in scored_docs) or 1.0
+    for doc in scored_docs:
+        bm25_normalized = doc["bm25_score"] / max_bm25 if max_bm25 > 0 else 0.0
+        doc["score"] = 0.65 * bm25_normalized + 0.35 * doc["vector_score"]
+
+    scored_docs.sort(key=lambda item: (-item["score"], item["path"]))
+
+    results: list[dict[str, Any]] = []
+    for doc in scored_docs:
+        page_path = wiki_sub / doc["path"]
+        matches = []
+        try:
+            text = page_path.read_text(encoding="utf-8")
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if pattern.search(line):
+                    matches.append({"line": line, "line_number": line_number})
+        except (OSError, UnicodeDecodeError):
+            pass
+
+        if not matches and doc["preview_line"]:
+            matches.append(
+                {
+                    "line": doc["preview_line"],
+                    "line_number": doc["preview_line_number"],
+                }
+            )
+
+        if not matches:
+            continue
+
+        results.append(
+            {
+                "path": doc["path"],
+                "matches": matches,
+                "score": round(doc["score"], 6),
+                "bm25_score": round(doc["bm25_score"], 6),
+                "vector_score": round(doc["vector_score"], 6),
+            }
+        )
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -220,31 +575,19 @@ def search_wiki(
     if not wiki_sub.exists():
         return []
 
-    flags = 0 if case_sensitive else re.IGNORECASE
-    try:
-        pattern = re.compile(re.escape(query), flags)
-    except re.error as exc:
-        raise ValueError(f"Invalid search query: {exc}") from exc
+    hybrid_results = _search_wiki_hybrid(
+        wiki_dir,
+        query,
+        case_sensitive=case_sensitive,
+    )
+    if hybrid_results is not None:
+        return hybrid_results
 
-    results = []
-    for page_path in sorted(wiki_sub.rglob("*.md")):
-        if any(part.startswith(".") for part in page_path.parts):
-            continue
-        try:
-            text = page_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-
-        matches = []
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            if pattern.search(line):
-                matches.append({"line": line, "line_number": line_number})
-
-        if matches:
-            rel_path = str(page_path.relative_to(wiki_sub))
-            results.append({"path": rel_path, "matches": matches})
-
-    return results
+    return _search_wiki_regex(
+        wiki_sub,
+        query,
+        case_sensitive=case_sensitive,
+    )
 
 
 def append_log(

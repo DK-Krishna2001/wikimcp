@@ -12,6 +12,7 @@ from .operations import (
     read_page,
     list_pages,
     search_wiki,
+    rebuild_search_index,
     append_log,
     delete_page,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "read_page",
     "list_pages",
     "search_wiki",
+    "rebuild_search_index",
     "append_log",
     "delete_page",
     "search_pages",

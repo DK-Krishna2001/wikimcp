@@ -102,9 +102,10 @@ Do NOT modify anything inside `raw/`.
 When the user asks a question:
 
 1. Call `read_index` to load `wiki/index.md` — this is your map
-2. Follow links to relevant pages with `read_page`
-3. If it's not in the index, use `search_wiki`
-4. Synthesise and answer — cite the pages you used
+2. Use `retrieve_context` when you need the most relevant snippets for a topic
+3. Use `search_pages` to discover ranked pages, then `read_page` when full-page context is needed
+4. If you need exact line matches, use `search_wiki`
+5. Synthesise and answer — cite the pages you used
 
 **Important:** good answers should be filed back into the wiki as new pages.
 A comparison you produced, an analysis, a connection you discovered — these

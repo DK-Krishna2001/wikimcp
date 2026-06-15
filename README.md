@@ -153,7 +153,7 @@ Or set up a cron job to auto-push every 5 minutes:
 
 ## MCP tools
 
-9 tools exposed to any MCP-compatible AI client:
+11 tools exposed to any MCP-compatible AI client:
 
 | Tool | Arguments | Description |
 |------|-----------|-------------|
@@ -164,6 +164,8 @@ Or set up a cron job to auto-push every 5 minutes:
 | `read_page` | `path` | Read a wiki page. |
 | `list_pages` | `subdirectory?` | List all pages (or a subdirectory). |
 | `search_wiki` | `query`, `case_sensitive?` | Full-text search across all pages. |
+| `search_pages` | `query`, `limit?` | Rank wiki pages by relevance and return compact snippets. |
+| `retrieve_context` | `query`, `limit?` | Return contextual snippets from the most relevant pages. |
 | `append_log` | `entry`, `operation?` | Append timestamped entry to `wiki/log.md` and auto-commit. |
 | `delete_page` | `path` | Delete a wiki page and auto-commit. |
 

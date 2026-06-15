@@ -103,6 +103,7 @@ wikimcp/
       wiki/
         __init__.py
         operations.py      # write_page, read_page, list_pages, search_wiki etc.
+        retrieval.py       # ranked page retrieval and contextual snippets
         git_layer.py       # auto-commit, remote management, push, conflict handling
         schema.py          # CLAUDE.md template, wiki folder scaffolding
       user/
@@ -141,6 +142,8 @@ In server mode, the user is identified from their bearer token before any tool r
 | `read_page` | `path` | Read a wiki page |
 | `list_pages` | `subdirectory?` | List all pages (or a subdirectory) |
 | `search_wiki` | `query`, `case_sensitive?` | Full-text search across all pages |
+| `search_pages` | `query`, `limit?` | Rank wiki pages by relevance and return compact snippets |
+| `retrieve_context` | `query`, `limit?` | Return contextual snippets from the most relevant pages |
 | `append_log` | `entry`, `operation?` | Append timestamped entry to log.md |
 | `delete_page` | `path` | Delete a wiki page |
 

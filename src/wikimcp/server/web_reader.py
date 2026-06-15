@@ -182,8 +182,9 @@ def create_web_reader(config_path: Path) -> APIRouter:
         page_tree = _build_page_tree(pages, username, token)
 
         return _templates.TemplateResponse(
-            "page.html",
-            {
+            request=request,
+            name="page.html",
+            context={
                 "request": request,
                 "username": username,
                 "token": token,
@@ -229,8 +230,9 @@ def create_web_reader(config_path: Path) -> APIRouter:
         page_tree = _build_page_tree(pages, username, token)
 
         return _templates.TemplateResponse(
-            "search.html",
-            {
+            request=request,
+            name="search.html",
+            context={
                 "request": request,
                 "username": username,
                 "token": token,
@@ -290,8 +292,9 @@ def create_web_reader(config_path: Path) -> APIRouter:
         title = path.split("/")[-1].replace(".md", "")
 
         return _templates.TemplateResponse(
-            "page.html",
-            {
+            request=request,
+            name="page.html",
+            context={
                 "request": request,
                 "username": username,
                 "token": token,

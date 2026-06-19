@@ -1,12 +1,14 @@
 name: Publish to PyPI
 
+# Triggered ONLY by a pushed version tag (e.g. v0.2.0), never on every push.
 on:
   push:
     tags:
       - "v*"
 
 jobs:
-  publish:
+  # Gate the publish on the test suite + coverage passing.
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -15,14 +17,35 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install build tools
-        run: pip install build twine
+      - name: Install package + dev deps
+        run: pip install -e ".[dev]"
 
-      - name: Build package
-        run: python -m build
+      - name: Run full test suite with coverage gate
+        run: >-
+          pytest -q
+          --cov=wikimcp.wiki.graph
+          --cov=wikimcp.wiki.graph_queries
+          --cov=wikimcp.wiki.graph_export
+          --cov-fail-under=90
 
-      - name: Upload to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload dist/*
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Build sdist + wheel
+        run: |
+          pip install build
+          python -m build
+
+      # Token-based publish using the repo's existing PYPI_API_TOKEN secret
+      # (the previous workflow used this same secret with twine).
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

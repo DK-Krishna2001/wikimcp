@@ -153,7 +153,9 @@ Or set up a cron job to auto-push every 5 minutes:
 
 ## MCP tools
 
-11 tools exposed to any MCP-compatible AI client:
+18 tools exposed to any MCP-compatible AI client.
+
+**Core wiki tools (11):**
 
 | Tool | Arguments | Description |
 |------|-----------|-------------|
@@ -169,7 +171,61 @@ Or set up a cron job to auto-push every 5 minutes:
 | `append_log` | `entry`, `operation?` | Append timestamped entry to `wiki/log.md` and auto-commit. |
 | `delete_page` | `path` | Delete a wiki page and auto-commit. |
 
+**Graph tools (7)** — deterministic and offline (no model calls), see [Page graph](#page-graph--visualization):
+
+| Tool | Arguments | Description |
+|------|-----------|-------------|
+| `get_related` | `page`, `direction?`, `limit?` | Related pages. `out` = pages this page references; `in` = **backlinks**; `both` = labelled. EXTRACTED before INFERRED. |
+| `get_subgraph` | `page`, `depth?`, `max_nodes?`, `direction?` | Bounded neighbourhood (nodes + edges) for **in-chat "show me the graph around X"** visualization. Sets a `truncated` flag when capped. |
+| `path` | `page_a`, `page_b`, `max_hops?` | Shortest connection between two pages, reporting each hop's direction and edge type. |
+| `surprising_links` | `limit?` | Likely cross-domain links: inferred-connected, zero shared tags, different sections. |
+| `hubs` | `limit?` | Most-connected pages by degree centrality (distinct in + out neighbours). |
+| `orphans` | — | Zero-edge pages, plus dead-ends (inbound but no outbound). |
+| `wiki_report` | `suggested_questions?`, `write_file?` | Deterministic digest: counts, hubs, orphans, surprising links, recent additions, templated questions. `write_file=true` writes git-tracked `WIKI_REPORT.md`. |
+
 Every write triggers an auto git commit with author `wikimcp-bot <wikimcp@localhost>`.
+
+---
+
+## Page graph & visualization
+
+wikimcp builds a **directed page graph** over your wiki — entirely deterministic
+and offline (no embeddings, no model calls). Because edges are directed
+(`source → target`), you get **backlinks** for free: ask "what references idea
+X?" and `get_related(X, direction="in")` returns every page that points at it.
+
+**Edges come in two confidence tiers:**
+
+- **EXTRACTED** (author-declared): explicit `[[wikilinks]]` / markdown links, and
+  links under a `## Related` section.
+- **INFERRED** (derived): *title-mention* edges (page B mentions page A's title
+  with no explicit link → `B → A`), guarded so short/common titles like "Notes"
+  never explode into a mega-hub; and bidirectional *shared-tag* edges weighted by
+  the number of shared frontmatter tags.
+
+**In-chat visualization.** `get_subgraph` returns a compact, render-ready
+`{nodes, edges}` payload that the AI can turn into a mermaid diagram or SVG on
+the spot — the backing tool for "show me the graph around Transformers".
+
+**Standalone exports** (offline, no CDN, no build step):
+
+```bash
+# Self-contained interactive graph (open the file directly in any browser)
+wikimcp export-graph html --wiki-dir ~/my-wiki      # writes graph.html
+
+# Make the wiki openable as an Obsidian vault (graph view + backlinks)
+wikimcp export-graph obsidian --wiki-dir ~/my-wiki  # writes .obsidian/ config
+```
+
+**Keep it fresh on every commit.** Install a git post-commit hook that
+re-indexes only the changed pages and refreshes any existing `WIKI_REPORT.md` /
+`graph.html`:
+
+```bash
+wikimcp install-graph-hook --wiki-dir ~/my-wiki
+# or refresh manually:
+wikimcp graph-refresh --wiki-dir ~/my-wiki
+```
 
 ---
 
@@ -231,6 +287,10 @@ Bearer token per user. Tokens stored as SHA-256 hashes — never plaintext. Mana
 wikimcp init [--wiki-dir ~/llm-wiki]
 wikimcp rebuild-search-index [--wiki-dir ~/llm-wiki]   # full rebuild of the hybrid search index
 wikimcp serve [--wiki-dir] [--transport stdio|http] [--host] [--port] [--allowed-host ...] [--allow-any-host]
+
+wikimcp export-graph html|obsidian [--wiki-dir ~/llm-wiki] [--out PATH]   # graph.html or Obsidian vault
+wikimcp install-graph-hook [--wiki-dir ~/llm-wiki]     # post-commit hook to refresh the graph
+wikimcp graph-refresh [--wiki-dir ~/llm-wiki]          # re-index + refresh artifacts manually
 
 wikimcp server init [--dir /data/wikimcp] [--port 8765]
 wikimcp server start [--dir] [--port] [--host] [--allowed-host ...] [--allow-any-host]

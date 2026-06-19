@@ -20,12 +20,17 @@ from .graph import (
     INFERRED,
     Edge,
     Graph,
+    build_graph,
     edge_priority,
     get_graph,
 )
 
 #: Filename for the written wiki digest (lives at the wiki repo root).
 WIKI_REPORT_FILENAME = "WIKI_REPORT.md"
+
+#: Commit message used when the post-commit hook re-commits refreshed artifacts.
+#: The hook skips when HEAD already carries this message, preventing a loop.
+REFRESH_COMMIT_MESSAGE = "wiki: refresh graph artifacts"
 
 
 # ---------------------------------------------------------------------------
@@ -618,3 +623,67 @@ def wiki_report(
             pass
 
     return report
+
+
+# ---------------------------------------------------------------------------
+# Incremental refresh (driven by the git post-commit hook)
+# ---------------------------------------------------------------------------
+
+def refresh_after_commit(
+    wiki_dir: Path,
+    changed_paths: Optional[List[str]] = None,
+    *,
+    commit: bool = True,
+) -> Dict[str, Any]:
+    """Re-index changed pages and refresh any generated artifacts.
+
+    ``changed_paths`` may be repo-relative (``wiki/topics/x.md``) or wiki-relative
+    (``topics/x.md``) — both are normalised. The graph build is incremental: with
+    a warm in-process cache only the changed pages are re-parsed, and the result
+    is byte-identical to a full rebuild. Fully offline.
+
+    Only artifacts that already exist on disk are refreshed
+    (``WIKI_REPORT.md`` and ``graph.html``); they are not created here. When
+    ``commit`` is True and an artifact changed, the refresh is committed with a
+    fixed message the hook recognises so it never re-triggers itself.
+    """
+    wiki_dir = Path(wiki_dir)
+
+    hint: List[str] = []
+    for raw in changed_paths or []:
+        rel = raw.strip()
+        if not rel:
+            continue
+        if rel.startswith("wiki/"):
+            rel = rel[len("wiki/") :]
+        elif "/wiki/" in rel:
+            rel = rel.split("/wiki/", 1)[1]
+        else:
+            continue
+        if rel:
+            hint.append(rel)
+
+    # Incremental build (full rebuild when the cache is cold, e.g. in the hook).
+    build_graph(wiki_dir, changed_paths=hint or None)
+
+    refreshed: List[str] = []
+    report_path = wiki_dir / WIKI_REPORT_FILENAME
+    if report_path.exists():
+        content = wiki_report(wiki_dir, suggested_questions=True, write_file=False)
+        report_path.write_text(content, encoding="utf-8")
+        refreshed.append(WIKI_REPORT_FILENAME)
+
+    html_path = wiki_dir / "graph.html"
+    if html_path.exists():
+        from .graph_export import export_html
+
+        export_html(wiki_dir, html_path)
+        refreshed.append("graph.html")
+
+    if commit and refreshed:
+        try:
+            auto_commit(wiki_dir, REFRESH_COMMIT_MESSAGE)
+        except Exception:
+            pass
+
+    return {"refreshed": refreshed}

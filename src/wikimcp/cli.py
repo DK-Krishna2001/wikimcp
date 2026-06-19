@@ -999,6 +999,81 @@ def cmd_export_graph(fmt: str, wiki_dir: str, out: Optional[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# graph-refresh — re-index changed pages + refresh artifacts (used by the hook)
+# ---------------------------------------------------------------------------
+
+
+@main.command("graph-refresh")
+@click.option(
+    "--wiki-dir",
+    default=str(DEFAULT_WIKI_DIR),
+    show_default=True,
+    help="Path to the wiki directory.",
+)
+@click.option(
+    "--changed",
+    default="",
+    help="Comma-separated list of changed paths (passed by the post-commit hook).",
+)
+def cmd_graph_refresh(wiki_dir: str, changed: str) -> None:
+    """Re-index changed pages and refresh generated artifacts (offline)."""
+    from wikimcp.wiki.graph_queries import refresh_after_commit
+
+    wiki_path = _expand(wiki_dir)
+    if not wiki_path.exists():
+        _abort(f"Wiki directory does not exist: {wiki_path}")
+
+    changed_paths = [p.strip() for p in changed.split(",") if p.strip()]
+    try:
+        result = refresh_after_commit(wiki_path, changed_paths or None)
+    except Exception as exc:
+        _abort(f"Graph refresh failed: {exc}")
+
+    refreshed = result.get("refreshed", [])
+    if refreshed:
+        _ok(f"Refreshed: {', '.join(refreshed)}")
+    else:
+        _ok("Graph re-indexed (no artifacts to refresh).")
+
+
+# ---------------------------------------------------------------------------
+# install-graph-hook — install the post-commit refresh hook
+# ---------------------------------------------------------------------------
+
+
+@main.command("install-graph-hook")
+@click.option(
+    "--wiki-dir",
+    default=str(DEFAULT_WIKI_DIR),
+    show_default=True,
+    help="Path to the wiki directory.",
+)
+def cmd_install_graph_hook(wiki_dir: str) -> None:
+    """Install a git post-commit hook that refreshes the graph on every commit."""
+    from wikimcp.wiki.git_layer import install_post_commit_hook
+
+    wiki_path = _expand(wiki_dir)
+    if not wiki_path.exists():
+        _abort(
+            f"Wiki directory does not exist: {wiki_path}\n"
+            "  Run [bold]wikimcp init[/bold] first."
+        )
+
+    try:
+        hook_path = install_post_commit_hook(wiki_path)
+    except FileExistsError as exc:
+        _abort(str(exc))
+    except Exception as exc:
+        _abort(f"Failed to install hook: {exc}")
+
+    _ok(f"Post-commit hook installed at [cyan]{hook_path}[/cyan]")
+    console.print(
+        "  Every commit now re-indexes changed pages and refreshes any existing "
+        "WIKI_REPORT.md / graph.html (offline)."
+    )
+
+
+# ---------------------------------------------------------------------------
 # install-service
 # ---------------------------------------------------------------------------
 
@@ -1094,3 +1169,9 @@ def cmd_install_service(server_dir: str, port: int) -> None:
             f"Unsupported platform: {platform}\n"
             "  wikimcp supports Linux (systemd) and macOS (launchd)."
         )
+
+
+# Allow `python -m wikimcp.cli ...` (used by the git post-commit hook, which
+# invokes the same interpreter wikimcp is installed under).
+if __name__ == "__main__":
+    main()

@@ -20,6 +20,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from ..wiki import operations
 from ..wiki import retrieval
+from ..wiki import graph_queries
 from ..wiki.git_layer import push_auto_remotes
 from .auth import extract_token, validate_token, update_last_active
 from .router import resolve_wiki_dir, get_auto_push_remotes
@@ -135,6 +136,11 @@ def _format_push_warnings(warnings: list) -> str:
     if not warnings:
         return ""
     return "\n\n" + "\n".join(warnings)
+
+
+def _json(payload) -> str:
+    """Serialise a graph-tool payload as compact, token-lean JSON."""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +273,68 @@ def create_local_server(
             return f"Page '{path}' deleted successfully."
         except (FileNotFoundError, ValueError, PermissionError) as exc:
             return f"Error: {exc}"
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # --- Graph tools (deterministic, offline; no model calls) ---
+
+    @mcp.tool()
+    def get_related(page: str, direction: str = "both", limit: int = 10) -> str:
+        """Pages related to `page`. direction: out=references, in=backlinks, both=labelled."""
+        try:
+            return _json(graph_queries.get_related(wiki_dir, page, direction, limit))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def get_subgraph(
+        page: str, depth: int = 2, max_nodes: int = 40, direction: str = "both"
+    ) -> str:
+        """Bounded neighbourhood graph around `page` (nodes+edges), for visualization."""
+        try:
+            return _json(
+                graph_queries.get_subgraph(wiki_dir, page, depth, max_nodes, direction)
+            )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def path(page_a: str, page_b: str, max_hops: int = 6) -> str:
+        """Shortest connection between two pages, with each hop's direction and edge type."""
+        try:
+            return _json(graph_queries.find_path(wiki_dir, page_a, page_b, max_hops))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def surprising_links(limit: int = 10) -> str:
+        """Likely cross-domain inferred links: connected, no shared tags, different sections."""
+        try:
+            return _json(graph_queries.surprising_links(wiki_dir, limit))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def hubs(limit: int = 10) -> str:
+        """Most-connected pages by degree centrality (in+out distinct neighbours)."""
+        try:
+            return _json(graph_queries.hubs(wiki_dir, limit))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def orphans() -> str:
+        """Pages with no edges (orphans) and pages with inbound but no outbound (dead-ends)."""
+        try:
+            return _json(graph_queries.orphans(wiki_dir))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def wiki_report(suggested_questions: bool = True, write_file: bool = False) -> str:
+        """Deterministic wiki digest: counts, hubs, orphans, surprising links, questions."""
+        try:
+            return graph_queries.wiki_report(wiki_dir, suggested_questions, write_file)
         except Exception as exc:
             return f"Error: {exc}"
 
@@ -503,6 +571,75 @@ def create_server_mode(
             operations.delete_page(wiki_dir, path)
             warnings = push_auto_remotes(wiki_dir, auto_push) if auto_push else []
             return f"Page '{path}' deleted successfully." + _format_push_warnings(warnings)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # --- Graph tools (deterministic, offline; no model calls) ---
+
+    @mcp.tool()
+    def get_related(page: str, direction: str = "both", limit: int = 10) -> str:
+        """Pages related to `page`. direction: out=references, in=backlinks, both=labelled."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return _json(graph_queries.get_related(wiki_dir, page, direction, limit))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def get_subgraph(
+        page: str, depth: int = 2, max_nodes: int = 40, direction: str = "both"
+    ) -> str:
+        """Bounded neighbourhood graph around `page` (nodes+edges), for visualization."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return _json(
+                graph_queries.get_subgraph(wiki_dir, page, depth, max_nodes, direction)
+            )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def path(page_a: str, page_b: str, max_hops: int = 6) -> str:
+        """Shortest connection between two pages, with each hop's direction and edge type."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return _json(graph_queries.find_path(wiki_dir, page_a, page_b, max_hops))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def surprising_links(limit: int = 10) -> str:
+        """Likely cross-domain inferred links: connected, no shared tags, different sections."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return _json(graph_queries.surprising_links(wiki_dir, limit))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def hubs(limit: int = 10) -> str:
+        """Most-connected pages by degree centrality (in+out distinct neighbours)."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return _json(graph_queries.hubs(wiki_dir, limit))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def orphans() -> str:
+        """Pages with no edges (orphans) and pages with inbound but no outbound (dead-ends)."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return _json(graph_queries.orphans(wiki_dir))
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    @mcp.tool()
+    def wiki_report(suggested_questions: bool = True, write_file: bool = False) -> str:
+        """Deterministic wiki digest: counts, hubs, orphans, surprising links, questions."""
+        try:
+            wiki_dir = _ctx()["wiki_dir"]
+            return graph_queries.wiki_report(wiki_dir, suggested_questions, write_file)
         except Exception as exc:
             return f"Error: {exc}"
 

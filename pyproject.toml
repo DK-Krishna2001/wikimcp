@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wikimcp"
-version = "0.1.8"
+version = "0.2.0"
 description = "Git-backed multi-user wiki MCP server — LTM for any AI"
 authors = [
   { name="Mohith Das", email="mohith@tuta.io" }
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0"]
+dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/mohith-das/wikimcp"
@@ -38,3 +38,10 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 wikimcp = ["templates/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = false
+source = ["wikimcp"]

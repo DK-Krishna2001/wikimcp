@@ -2,6 +2,36 @@
 
 All notable changes to wikimcp will be documented in this file.
 
+## [0.2.0] - 2026-06-19
+
+### Added
+- **Directed page-graph layer** — a deterministic, offline graph built from the
+  wiki on demand and cached. Edges are directed (source → target), which is what
+  gives backlinks. Edge types:
+  - EXTRACTED (high confidence): explicit `[[wikilinks]]` / markdown links and
+    entries under a `## Related` section.
+  - INFERRED (derived): directed *title-mention* edges (guarded against
+    degenerate matches — short/common titles never explode into a mega-hub) and
+    bidirectional *shared-tag* edges weighted by the number of shared tags.
+- **Seven new MCP tools** (deterministic, no model calls): `get_related`
+  (in/out/both, with backlinks), `get_subgraph` (bounded, render-ready
+  neighbourhood for in-chat visualization), `path` (shortest connection with
+  per-hop direction + edge type), `surprising_links` (cross-domain inferred
+  links), `hubs` (degree centrality), `orphans` (zero-edge pages + dead-ends),
+  and `wiki_report` (deterministic digest with templated suggested questions;
+  can write a git-tracked `WIKI_REPORT.md`). Tool count is now 18.
+- **Exports** — `wikimcp export-graph html` writes a self-contained `graph.html`
+  (graph inlined as JSON + a vendored, dependency-free force-directed renderer;
+  no network at view time, no build step). `wikimcp export-graph obsidian` makes
+  the wiki openable as an Obsidian vault (graph view + backlinks) without
+  mutating source pages.
+- **Incremental refresh hook** — `wikimcp install-graph-hook` installs a git
+  post-commit hook that re-indexes only the changed pages and refreshes existing
+  `WIKI_REPORT.md` / `graph.html`, fully offline. `wikimcp graph-refresh` runs
+  the same refresh manually.
+- Comprehensive deterministic test suite for the graph layer with a realistic
+  24-page fixture; ≥90% coverage on the new modules, enforced in CI.
+
 ## [0.1.5] - 2026-06-03
 
 ### Fixed

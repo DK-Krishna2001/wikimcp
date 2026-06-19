@@ -14,10 +14,12 @@ def test_help_exits_zero() -> None:
 
 
 def test_version_flag() -> None:
+    import wikimcp
+
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.1" in result.output
+    assert wikimcp.__version__ in result.output
 
 
 def test_init_command_creates_wiki(tmp_path: Path) -> None:

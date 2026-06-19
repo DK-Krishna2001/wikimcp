@@ -933,6 +933,72 @@ def cmd_export(username: str, fmt: str, out_dir: str, server_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# export-graph — visualization / Obsidian export for a local wiki
+# ---------------------------------------------------------------------------
+#
+# Named ``export-graph`` (not ``export``) because ``wikimcp export <username>``
+# already exists for server-mode archive export and takes a positional
+# username; reusing ``export`` as a group would break that command.
+
+
+@main.command("export-graph")
+@click.argument("fmt", type=click.Choice(["html", "obsidian"]))
+@click.option(
+    "--wiki-dir",
+    default=str(DEFAULT_WIKI_DIR),
+    show_default=True,
+    help="Path to the wiki directory.",
+)
+@click.option(
+    "--out",
+    "out",
+    default=None,
+    help="Output path: graph.html file (html) or vault copy dir (obsidian). "
+         "Defaults to writing inside the wiki directory.",
+)
+def cmd_export_graph(fmt: str, wiki_dir: str, out: Optional[str]) -> None:
+    """Export the wiki page-graph as self-contained HTML or an Obsidian vault.
+
+    \b
+    wikimcp export-graph obsidian     # add .obsidian config (open wiki in Obsidian)
+    wikimcp export-graph html         # write a self-contained graph.html
+    """
+    from wikimcp.wiki.graph_export import export_html, export_obsidian
+
+    wiki_path = _expand(wiki_dir)
+    if not wiki_path.exists():
+        _abort(
+            f"Wiki directory does not exist: {wiki_path}\n"
+            "  Run [bold]wikimcp init[/bold] first."
+        )
+
+    out_path = _expand(out) if out else None
+
+    if fmt == "obsidian":
+        try:
+            result = export_obsidian(wiki_path, out_path)
+        except Exception as exc:
+            _abort(f"Obsidian export failed: {exc}")
+        if result["copied"]:
+            _ok(f"Obsidian vault copy written to [cyan]{result['vault_root']}[/cyan]")
+        else:
+            _ok(f"Obsidian config written to [cyan]{result['config_dir']}[/cyan]")
+        console.print(
+            f"  Open [cyan]{result['vault_root']}[/cyan] in Obsidian for "
+            "graph view + backlinks."
+        )
+    else:
+        try:
+            result = export_html(wiki_path, out_path)
+        except Exception as exc:
+            _abort(f"HTML export failed: {exc}")
+        _ok(
+            f"Self-contained graph written to [cyan]{result['path']}[/cyan] "
+            f"({result['nodes']} pages, {result['edges']} edges)."
+        )
+
+
+# ---------------------------------------------------------------------------
 # install-service
 # ---------------------------------------------------------------------------
 
